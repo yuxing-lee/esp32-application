@@ -22,8 +22,15 @@ float itemWeight = 20.1;
 int lowStockAlert = 3;
 // =====================
 
-int lastQuantity = -1;
-bool alertSent = false;
+// ===== 穩定判斷設定 =====
+// 需連續幾次讀到相同數量才視為穩定（每次間隔 2 秒，設 3 = 約 6 秒）
+#define STABLE_THRESHOLD 3
+// =======================
+
+int lastQuantity  = -1;
+int pendingQuantity = -1;
+int stableCount   = 0;
+bool alertSent    = false;
 
 void setup() {
   Serial.begin(115200);
@@ -57,45 +64,75 @@ void loop() {
     float totalWeight = scale.get_units(10);
     float productWeight = totalWeight - boxWeight;
     if (productWeight < 0) productWeight = 0;
-    
+
     int quantity = round(productWeight / itemWeight);
-    
-    Serial.print("數量: ");
-    Serial.println(quantity);
-    
-    // 數量變化時通知
-    if (quantity != lastQuantity && lastQuantity != -1) {
+
+    // ===== 穩定判斷 =====
+    if (quantity == pendingQuantity) {
+      stableCount++;
+    } else {
+      pendingQuantity = quantity;
+      stableCount = 1;
+    }
+
+    Serial.print("讀數: ");
+    Serial.print(quantity);
+    Serial.print("  穩定計數: ");
+    Serial.print(stableCount);
+    Serial.print("/");
+    Serial.println(STABLE_THRESHOLD);
+
+    // 尚未穩定，等待下一次
+    if (stableCount < STABLE_THRESHOLD) {
+      delay(2000);
+      return;
+    }
+
+    // 穩定後才比較並通知
+    stableCount = STABLE_THRESHOLD; // 防止溢位
+
+    // 初次啟動，設定基準值不通知
+    if (lastQuantity == -1) {
+      lastQuantity = quantity;
+      Serial.print("初始庫存: ");
+      Serial.println(quantity);
+      delay(2000);
+      return;
+    }
+
+    // 數量穩定後有變化才通知
+    if (quantity != lastQuantity) {
       int diff = quantity - lastQuantity;
       String msg;
-      
+
       if (diff > 0) {
         msg = "入庫 +" + String(diff) + " 件, 目前庫存: " + String(quantity) + " 件";
       } else {
         msg = "出庫 " + String(diff) + " 件, 目前庫存: " + String(quantity) + " 件";
       }
-      
+
       sendLineMessage(msg);
+
+      // 低庫存警告（只發一次）
+      if (quantity <= lowStockAlert && quantity > 0 && !alertSent) {
+        sendLineMessage("警告: 庫存不足! 只剩 " + String(quantity) + " 件");
+        alertSent = true;
+      }
+
+      // 庫存為零
+      if (quantity == 0) {
+        sendLineMessage("警告: 庫存為零! 請立即補貨");
+      }
+
+      // 補貨後重置警告
+      if (quantity > lowStockAlert) {
+        alertSent = false;
+      }
+
+      lastQuantity = quantity;
     }
-    
-    // 低庫存警告（只發一次）
-    if (quantity <= lowStockAlert && quantity > 0 && !alertSent) {
-      sendLineMessage("警告: 庫存不足! 只剩 " + String(quantity) + " 件");
-      alertSent = true;
-    }
-    
-    // 庫存為零
-    if (quantity == 0 && lastQuantity > 0) {
-      sendLineMessage("警告: 庫存為零! 請立即補貨");
-    }
-    
-    // 補貨後重置警告
-    if (quantity > lowStockAlert) {
-      alertSent = false;
-    }
-    
-    lastQuantity = quantity;
   }
-  
+
   delay(2000);
 }
 
